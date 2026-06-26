@@ -16,10 +16,13 @@ The pipeline:
 1. Extract text from PDF (PyMuPDF)
 2. Reformat each section into clean Markdown
    (Claude API, `claude-opus-4-8`)
-3. Chunk at Regulation/Rule level and embed
-   (sentence-transformers, `all-MiniLM-L6-v2`)
+3. Chunk at Regulation/Rule/sub-section level and
+   embed (sentence-transformers,
+   `BAAI/bge-base-en-v1.5`)
 4. Store in a local vector database (ChromaDB)
 5. Query via CLI or `/query` skill in Claude Code
+   (skill rewrites colloquial queries to legal terms
+   before hitting the index)
 
 ---
 
@@ -138,12 +141,20 @@ pip install chromadb sentence-transformers
 
 - Reads all `docs/**/*.md` (excluding `index.md`).
 - Parses YAML frontmatter for metadata.
-- Splits each file's body at `##` / `###`
-  heading boundaries — one chunk per
-  Regulation/Rule.
+- Splits each file's body at `##`, `###`, and `####`
+  heading boundaries. Splitting at `####` is critical:
+  large rules like Rule 1.2 contain many unrelated
+  sub-sections (gifts, conflict of interest, outside
+  activities). Without `####` splitting, the entire
+  rule becomes one chunk whose embedding averages
+  out to nothing specific, breaking retrieval.
+  `####` sub-section headings are prefixed with
+  their parent rule for context
+  (e.g., `Rule 1.2 › Honours, gifts or remuneration`).
 - Embeds all chunks with
-  `sentence-transformers all-MiniLM-L6-v2`
-  (runs locally, no API key needed).
+  `BAAI/bge-base-en-v1.5` (runs locally, no API
+  key needed). BGE is trained for retrieval tasks
+  and outperforms MiniLM on legal/domain text.
 - Persists to ChromaDB at `./chroma_db/`
   with cosine similarity metric.
 - Each chunk stored with metadata:
@@ -156,7 +167,7 @@ pip install chromadb sentence-transformers
 python3 scripts/build_index.py
 ```
 
-Produces 248 chunks from 20 files in ~10 seconds.
+Produces 320 chunks from 20 files in ~50 seconds.
 
 ---
 
@@ -166,7 +177,10 @@ Produces 248 chunks from 20 files in ~10 seconds.
 
 **How it works:**
 
-- Embeds the query string with the same model.
+- Prepends the BGE query prefix to the query string
+  before embedding (required for asymmetric
+  retrieval — documents are embedded without the
+  prefix, queries with it).
 - Runs cosine similarity search against ChromaDB.
 - Prints top-N results with score, source citation,
   section path, and a 600-char excerpt.
@@ -180,8 +194,15 @@ python3 scripts/query.py "salary scales" --section "Annex I"
 **Claude Code skill:** `.claude/skills/query/SKILL.md`
 
 Invoke as `/query your question` inside Claude Code.
-Claude runs `query.py`, reads the retrieved chunks,
-and synthesizes a cited answer.
+The skill first rewrites the user's colloquial query
+into legal terminology before calling `query.py`.
+This bridges the vocabulary gap between natural
+language ("took money from vendor") and formal legal
+text ("accept remuneration from source with
+contractual relationship"). If all scores are below
+0.55, the skill runs a second query with different
+synonyms. Claude then synthesizes a cited answer from
+the retrieved chunks.
 
 ---
 
@@ -247,7 +268,12 @@ hardcoded section boundaries. To add another PDF:
   truncate long rules before the key numbers appear.
   The skill works around this by reading the source
   `.md` file directly when needed.
-- `all-MiniLM-L6-v2` is optimized for speed, not
-  legal/domain text. A domain-tuned model or
-  larger model (e.g., `all-mpnet-base-v2`) would
-  improve retrieval precision at higher cost.
+- Colloquial queries still require the skill's
+  query-rewriting step to work well. Running
+  `query.py` directly with natural language may
+  return low-relevance results (scores < 0.55).
+- `BAAI/bge-base-en-v1.5` is a general-purpose
+  retrieval model. A domain-tuned legal model or
+  the larger `BAAI/bge-large-en-v1.5` (1024 dims)
+  would improve precision further at higher memory
+  and compute cost.

@@ -16,7 +16,9 @@ from sentence_transformers import SentenceTransformer
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
 COLLECTION = "un2018"
-MODEL = "all-MiniLM-L6-v2"
+MODEL = "BAAI/bge-base-en-v1.5"
+# BGE retrieval models expect this prefix on query strings (not documents).
+BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 def main():
@@ -36,7 +38,7 @@ def main():
     client = chromadb.PersistentClient(path=DB_PATH)
     collection = client.get_collection(COLLECTION)
 
-    embedding = model.encode([args.query]).tolist()
+    embedding = model.encode([BGE_QUERY_PREFIX + args.query]).tolist()
     where = {"section": args.section} if args.section else None
 
     results = collection.query(
